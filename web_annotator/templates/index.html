@@ -337,10 +337,27 @@
         }
 
         .alert {
-            padding: 12px;
-            border-radius: 6px;
-            margin-bottom: 15px;
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            max-width: 400px;
+            padding: 15px 40px 15px 15px;
+            border-radius: 8px;
             display: none;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
         }
 
         .alert.active {
@@ -349,12 +366,34 @@
 
         .alert-error {
             background: #7f1d1d;
-            border: 1px solid #ef4444;
+            border: 2px solid #ef4444;
         }
 
         .alert-success {
             background: #14532d;
-            border: 1px solid #22c55e;
+            border: 2px solid #22c55e;
+        }
+
+        .alert-close {
+            position: absolute;
+            top: 50%;
+            right: 12px;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: white;
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0;
+            width: 24px;
+            height: 24px;
+            line-height: 1;
+            opacity: 0.7;
+        }
+
+        .alert-close:hover {
+            opacity: 1;
+            transform: translateY(-50%) scale(1.1);
         }
     </style>
 </head>
@@ -383,8 +422,14 @@
             </div>
         </header>
 
-        <div class="alert alert-error" id="error-alert"></div>
-        <div class="alert alert-success" id="success-alert"></div>
+        <div class="alert alert-error" id="error-alert">
+            <button class="alert-close" onclick="dismissAlert('error-alert')">&times;</button>
+            <span id="error-text"></span>
+        </div>
+        <div class="alert alert-success" id="success-alert">
+            <button class="alert-close" onclick="dismissAlert('success-alert')">&times;</button>
+            <span id="success-text"></span>
+        </div>
 
         <div class="main-content">
             <div class="canvas-section">
@@ -444,6 +489,10 @@
 
                 <div class="control-group">
                     <h3>📂 Navigation</h3>
+                    <div class="button-grid" style="margin-bottom: 10px;">
+                        <button class="btn-secondary" onclick="loadPreviousSegment()">← Previous</button>
+                        <button class="btn-primary" onclick="loadNextUnlabeled()">Next Unlabeled →</button>
+                    </div>
                     <div class="segment-nav">
                         <input type="number" id="segment-input" min="1" max="62" placeholder="Segment #">
                         <button class="btn-primary" onclick="loadSegment()">Load</button>
@@ -487,6 +536,8 @@
         let annotatedSegments = [];  // List of segment numbers with saved annotations
         let isSaved = false;  // Whether current segment's annotation is saved
         let totalSegments = 62;  // Will be set from server
+        let previewDebounce = null;  // For auto-preview debouncing
+        let isGeneratingPreview = false;  // To prevent multiple concurrent previews
 
         // Initialize
         window.onload = async () => {
@@ -496,6 +547,9 @@
             // Add event listeners
             canvas.addEventListener('click', handleCanvasClick);
             canvas.addEventListener('contextmenu', handleCanvasRightClick);
+
+            // Add keyboard shortcuts
+            document.addEventListener('keydown', handleKeyboardShortcut);
 
             await initializeApp();
         };
@@ -633,6 +687,9 @@
             // Mark as unsaved
             isSaved = false;
             updateSegmentStatus(false);
+
+            // Auto-preview with debounce
+            autoPreview();
         }
 
         function updateSegmentStatus(saved) {
@@ -652,7 +709,16 @@
             updatePointList();
             updatePointCounts();
 
+            document.getElementById('save-btn').disabled = points.length === 0;
             document.getElementById('process-btn').disabled = points.length === 0;
+
+            // Auto-preview with debounce
+            if (points.length > 0) {
+                autoPreview();
+            } else {
+                // Hide preview if no points left
+                document.getElementById('preview-container').style.display = 'none';
+            }
         }
 
         function clearPoints() {
@@ -696,13 +762,19 @@
             document.getElementById('progress-fill').style.width = percentage + '%';
         }
 
-        async function previewMask() {
+        async function previewMask(silent = false) {
             if (points.length === 0) {
-                showError('Please add at least one point first');
+                if (!silent) showError('Please add at least one point first');
                 return;
             }
 
-            showLoading('Generating mask preview...');
+            // Prevent concurrent preview requests
+            if (isGeneratingPreview) return;
+            isGeneratingPreview = true;
+
+            if (!silent) {
+                showLoading('Generating mask preview...');
+            }
             document.getElementById('preview-btn').disabled = true;
 
             try {
@@ -719,7 +791,7 @@
                 const data = await response.json();
 
                 if (data.error) {
-                    showError(data.error);
+                    if (!silent) showError(data.error);
                     return;
                 }
 
@@ -728,17 +800,20 @@
                 document.getElementById('preview-container').style.display = 'block';
 
                 const coveragePercent = (data.mask_coverage * 100).toFixed(1);
-                if (data.mask_coverage > 0.5) {
-                    showError(`Warning: ${coveragePercent}% coverage is very high! You may be capturing too much background. Add negative points (right-click) on areas you don't want.`);
-                } else {
-                    showSuccess(`Mask coverage: ${coveragePercent}%`);
+                if (!silent) {
+                    if (data.mask_coverage > 0.5) {
+                        showError(`Warning: ${coveragePercent}% coverage is very high! You may be capturing too much background. Add negative points (right-click) on areas you don't want.`);
+                    } else {
+                        showSuccess(`Mask coverage: ${coveragePercent}%`);
+                    }
                 }
 
             } catch (error) {
-                showError('Preview failed: ' + error.message);
+                if (!silent) showError('Preview failed: ' + error.message);
             } finally {
-                hideLoading();
+                if (!silent) hideLoading();
                 document.getElementById('preview-btn').disabled = false;
+                isGeneratingPreview = false;
             }
         }
 
@@ -935,18 +1010,128 @@
             document.getElementById('loading').classList.remove('active');
         }
 
-        function showError(message) {
-            const alert = document.getElementById('error-alert');
-            alert.textContent = message;
-            alert.classList.add('active');
-            setTimeout(() => alert.classList.remove('active'), 5000);
+        function autoPreview() {
+            // Clear existing timeout
+            clearTimeout(previewDebounce);
+
+            // Debounce preview generation (300ms)
+            previewDebounce = setTimeout(async () => {
+                if (points.length > 0 && !isGeneratingPreview) {
+                    await previewMask(true); // true = silent mode (no loading spinner)
+                }
+            }, 300);
         }
 
-        function showSuccess(message) {
-            const alert = document.getElementById('success-alert');
-            alert.textContent = message;
+        function handleKeyboardShortcut(e) {
+            // Ignore if typing in an input field
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+                return;
+            }
+
+            // Ctrl+S / Cmd+S: Save
+            if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                e.preventDefault();
+                if (!document.getElementById('save-btn').disabled) {
+                    saveAnnotation();
+                }
+            }
+            // Ctrl+Enter / Cmd+Enter: Preview
+            else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                if (!document.getElementById('preview-btn').disabled) {
+                    previewMask();
+                }
+            }
+            // Escape: Clear points
+            else if (e.key === 'Escape') {
+                e.preventDefault();
+                clearPoints();
+            }
+            // N: Next segment
+            else if (e.key === 'n' || e.key === 'N') {
+                e.preventDefault();
+                skipSegment();
+            }
+            // P: Process
+            else if (e.key === 'p' || e.key === 'P') {
+                e.preventDefault();
+                if (!document.getElementById('process-btn').disabled) {
+                    processSegment();
+                }
+            }
+            // Arrow Left: Previous segment
+            else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                loadPreviousSegment();
+            }
+            // Arrow Right: Next segment
+            else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                skipSegment();
+            }
+        }
+
+        async function loadPreviousSegment() {
+            const prevSegment = currentSegment - 1;
+            if (prevSegment < 1) {
+                showError('Already at the first segment!');
+                return;
+            }
+            await loadNextSegment(prevSegment);
+        }
+
+        async function loadNextUnlabeled() {
+            showLoading('Finding next unlabeled segment...');
+            try {
+                const response = await fetch('/api/next_unlabeled', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({current_segment: currentSegment})
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+
+                if (data.next_segment === null) {
+                    showSuccess('All remaining segments are annotated! 🎉');
+                    return;
+                }
+
+                await loadNextSegment(data.next_segment);
+
+            } catch (error) {
+                showError('Failed to find unlabeled segment: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function dismissAlert(alertId) {
+            document.getElementById(alertId).classList.remove('active');
+        }
+
+        function showError(message) {
+            const alert = document.getElementById('error-alert');
+            const text = document.getElementById('error-text');
+            text.textContent = message;
             alert.classList.add('active');
-            setTimeout(() => alert.classList.remove('active'), 5000);
+            // Errors stay until dismissed (no auto-dismiss)
+        }
+
+        function showSuccess(message, autoDismiss = true) {
+            const alert = document.getElementById('success-alert');
+            const text = document.getElementById('success-text');
+            text.textContent = message;
+            alert.classList.add('active');
+
+            // Success messages can auto-dismiss after 5 seconds (optional)
+            if (autoDismiss) {
+                setTimeout(() => alert.classList.remove('active'), 5000);
+            }
         }
     </script>
 </body>

@@ -488,6 +488,29 @@ def api_load_segment():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/next_unlabeled', methods=['POST'])
+def api_next_unlabeled():
+    """Find the next segment that doesn't have an annotation"""
+    try:
+        data = request.json
+        current_seg = data['current_segment']
+
+        # Find next unlabeled segment
+        for seg_num in range(current_seg + 1, CONFIG['num_segments'] + 1):
+            if seg_num not in state['annotations']:
+                return jsonify({
+                    'next_segment': seg_num
+                })
+
+        # No unlabeled segments found
+        return jsonify({
+            'next_segment': None
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/save_annotation', methods=['POST'])
 def api_save_annotation():
     """Save annotation for a segment without processing"""
